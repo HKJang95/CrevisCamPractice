@@ -6,11 +6,15 @@
 #include "afxcmn.h"
 #include "afxwin.h"
 
+
 #define NORMAL_VID 0
 #define BINARY_VID 1
 #define ROI_VID 2
 #define TOTAL_DISP 3
-
+// display related define
+#define DEVICE_DISCONNECTED -10
+#define DEVICE_CAMNUM_INIT -1
+// camera error codes
 // CCrevisCamPracticeDlg 대화 상자
 class CCrevisCamPracticeDlg : public CDialogEx
 {

@@ -55,14 +55,14 @@ END_MESSAGE_MAP()
 
 CCrevisCamPracticeDlg::CCrevisCamPracticeDlg(CWnd* pParent /*=NULL*/)
 	: CDialogEx(CCrevisCamPracticeDlg::IDD, pParent)
-	, m_hDevice(0)
+	, m_hDevice(-1)
 	, m_Width(0)
 	, m_Height(0)
 	, m_BufferSize(0)
 	, m_pImage(NULL)
 	, m_IsOpened(FALSE)
 	, m_pBitmap(NULL)
-	, m_deviceEnum(-1)
+	, m_deviceEnum(DEVICE_CAMNUM_INIT)
 	, m_roiX(0)
 	, m_roiY(0)
 	, m_roiWidth(0)
@@ -264,11 +264,16 @@ void CCrevisCamPracticeDlg::OnBnClickedOpenbtn()
 	CString deviceIPCstr;
 	CString strErr;
 	char * deviceIp = new char[bufsize];
-
-	m_deviceEnum = -1;
+	if (m_deviceEnum == DEVICE_DISCONNECTED)
+	{
+		ST_AcqStop(m_hDevice);
+		ST_CloseDevice(m_hDevice);
+	}
+	m_deviceEnum = DEVICE_CAMNUM_INIT;
 	m_DeviceIPControl.GetWindowTextW(inputIP);
 	// 유저 입력 IP를 받는 부분
 
+	// for when device is disconnected and than connected
 	status = ST_UpdateDevice();
 	if (status != MCAM_ERR_SUCCESS)
 	{
@@ -278,9 +283,8 @@ void CCrevisCamPracticeDlg::OnBnClickedOpenbtn()
 		deviceIp = NULL;
 		return;
 	} // Device Update : updates list of devices.
-	
-	ST_GetAvailableCameraNum(&camNum);
-	if (camNum <= 0)
+	status = ST_GetAvailableCameraNum(&camNum);
+	if (status != MCAM_ERR_SUCCESS)
 	{
 		strErr.Format(_T("No Camera Available! Check connection."));
 		AfxMessageBox(strErr, MB_OK | MB_ICONSTOP);
@@ -288,8 +292,7 @@ void CCrevisCamPracticeDlg::OnBnClickedOpenbtn()
 		deviceIp = NULL;
 		return;
 	} // get numbers of connected cams and check if at least 1 is connected
-
-
+	
 	for (unsigned int i = 0; i < camNum; i++)
 	{
 		status = ST_GetEnumDeviceInfo(i, MCAM_DEVICEINFO_IP_ADDRESS, deviceIp, &bufsize);
@@ -316,7 +319,7 @@ void CCrevisCamPracticeDlg::OnBnClickedOpenbtn()
 	if (m_deviceEnum < 0)
 	{
 		strErr = (_T("Device not found with your input IP.\nAvailable IP list is : \n"));
-		for (int i = 0; i < camNum; i++)
+		for (unsigned int i = 0; i < camNum; i++)
 		{
 			status = ST_GetEnumDeviceInfo(i, MCAM_DEVICEINFO_IP_ADDRESS, deviceIp, &bufsize);
 			if (status != MCAM_ERR_SUCCESS)
@@ -376,8 +379,6 @@ void CCrevisCamPracticeDlg::OnBnClickedOpenbtn()
 	m_pGraphics[BINARY_VID]->DrawImage(m_pBitmap, 0, 0, m_Width, m_Height);
 	m_pGraphics[ROI_VID]->DrawImage(m_pBitmap, 0, 0, m_Width, m_Height);
 
-	m_IsOpened = TRUE;
-
 	status = ST_AcqStart(m_hDevice);
 	if (status != MCAM_ERR_SUCCESS)
 	{
@@ -391,7 +392,7 @@ void CCrevisCamPracticeDlg::OnBnClickedOpenbtn()
 	ResetEvent(m_hTerminate); // terminate thread for normal video streaming signal off
 	m_hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)ThreadProc, this, 0, NULL);
 
-	AfxMessageBox(TEXT("Camera open complete! Acquisition started."));
+	AfxMessageBox(_T("Camera open complete! Acquisition started."));
 
 	GetDlgItem(IDC_OPENBTN)->EnableWindow(FALSE);
 	GetDlgItem(IDC_CLOSEBTN)->EnableWindow(TRUE);
@@ -401,6 +402,9 @@ void CCrevisCamPracticeDlg::OnBnClickedOpenbtn()
 
 	delete[] deviceIp;
 	deviceIp = NULL;
+	m_IsOpened = TRUE;
+	SetThreadExecutionState(ES_DISPLAY_REQUIRED | ES_SYSTEM_REQUIRED | ES_CONTINUOUS);
+	// disabling power saver mode. it causes error.
 
 	MemoryLeakCheck();
 } // When "Open" button click
@@ -439,7 +443,6 @@ void CCrevisCamPracticeDlg::OnBnClickedClosebtn()
 	}
 	// image buffer free and nullification
 	ST_CloseDevice(m_hDevice);
-	m_IsOpened = FALSE;
 
 	GetDlgItem(IDC_OPENBTN)->EnableWindow(TRUE);
 	GetDlgItem(IDC_NORPLAYBTN)->EnableWindow(FALSE);
@@ -449,6 +452,9 @@ void CCrevisCamPracticeDlg::OnBnClickedClosebtn()
 	GetDlgItem(IDC_ROISTOPBTN)->EnableWindow(FALSE);
 	GetDlgItem(IDC_BINSTOPBTN)->EnableWindow(FALSE);
 	GetDlgItem(IDC_CLOSEBTN)->EnableWindow(FALSE);
+
+	m_IsOpened = FALSE;
+	SetThreadExecutionState(ES_CONTINUOUS);
 	MemoryLeakCheck();
 	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
 } // when "Close" button click
@@ -598,12 +604,12 @@ void CCrevisCamPracticeDlg::OnDestroy()
 			m_pImage = NULL;
 		}
 		// image grab buffer free & nullification
-
 		ST_CloseDevice(m_hDevice);
 	}
 	// camera close procedure
-
 	ST_FreeSystem();
+
+	SetThreadExecutionState(ES_CONTINUOUS);
 	MemoryLeakCheck();
 	// TODO: 여기에 메시지 처리기 코드를 추가합니다.
 } 
@@ -640,6 +646,36 @@ void CCrevisCamPracticeDlg::ReceiveImage()
 					InvalidateRect(m_rcDisp[i], FALSE);
 				}
 			}
+		}
+		else
+		{
+			AfxMessageBox(_T("Camera is disconnected!"));
+			for (int i = 0; i < TOTAL_DISP; i++)
+			{
+				m_IsPlay[i] = FALSE;
+			} // turning off all displays
+			
+			// Camera acquisition stops
+
+			if (m_pImage != NULL)
+			{
+				free(m_pImage);
+				m_pImage = NULL;
+			}
+			// image buffer free and nullification
+
+			GetDlgItem(IDC_OPENBTN)->EnableWindow(TRUE);
+			GetDlgItem(IDC_NORPLAYBTN)->EnableWindow(FALSE);
+			GetDlgItem(IDC_ROIPLAYBTN)->EnableWindow(FALSE);
+			GetDlgItem(IDC_BINPLAYBTN)->EnableWindow(FALSE);
+			GetDlgItem(IDC_NORSTOPBTN)->EnableWindow(FALSE);
+			GetDlgItem(IDC_ROISTOPBTN)->EnableWindow(FALSE);
+			GetDlgItem(IDC_BINSTOPBTN)->EnableWindow(FALSE);
+			GetDlgItem(IDC_CLOSEBTN)->EnableWindow(FALSE);
+			m_IsOpened = FALSE;
+			m_deviceEnum = DEVICE_DISCONNECTED;
+			SetThreadExecutionState(ES_CONTINUOUS);
+			return;
 		}
 		MemoryLeakCheck();
 	}
