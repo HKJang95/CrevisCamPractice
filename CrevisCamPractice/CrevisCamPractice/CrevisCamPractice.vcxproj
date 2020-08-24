@@ -54,12 +54,12 @@
       <Optimization>Disabled</Optimization>
       <PreprocessorDefinitions>WIN32;_WINDOWS;_DEBUG;_WINSOCK_DEPRECATED_NO_WARNINGS;_CRT_SECURE_NO_WARNINGS;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <SDLCheck>true</SDLCheck>
-      <AdditionalIncludeDirectories>C:\Users\hvs\Documents\Visual Studio 2013\Projects\CrevisCamPractice\CrevisCamPractice\external_libs\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>E:\필요문서\과제\Crevis SDk 활용 실습\CrevisCamPractice\CrevisCamPractice\external_libs\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalLibraryDirectories>C:\Users\hvs\Documents\Visual Studio 2013\Projects\CrevisCamPractice\CrevisCamPractice\external_libs\lib\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories>E:\필요문서\과제\Crevis SDk 활용 실습\CrevisCamPractice\CrevisCamPractice\external_libs\lib\x86;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <AdditionalDependencies>CrevisTL40.lib;VirtualFG40.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Midl>

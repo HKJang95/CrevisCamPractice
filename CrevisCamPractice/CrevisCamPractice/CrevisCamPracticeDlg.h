@@ -54,9 +54,13 @@ public:
 public:
 	void SetFeature();
 	void ReceiveImage();
+	void ProcessNormalImage();
+	void ProcessROIImage();
+	void ProcessBinImage();
 	void ConvertPalette(int vidType);
 	void DrawImage(int vidType);
 	void MemoryLeakCheck();
+	BOOL ImageProcess();
 
 private:
 	INT32		m_hDevice; // Device 핸들
@@ -64,7 +68,9 @@ private:
 	INT32		m_Height; // 영상 높이 폭
 	INT32		m_BufferSize; // 이미지 버퍼사이즈
 	INT32		m_deviceEnum; // Device enum id 저장용
-	void*		m_pImage; // 이미지 버퍼 포인터
+	char*		m_pImage[TOTAL_DISP]; // 이미지 버퍼 포인터
+	char*		m_pOriImage; // 원본 이미지
+	char*		m_pROIImage;
 	BOOL		m_IsOpened; // 카메라 오픈여부 bool flag
 	BOOL		m_IsPlay[TOTAL_DISP]; // 활성화된 스크린용 bool flag
 	UINT32		m_Threshold; // 이진화 영상 threshold값
@@ -76,13 +82,15 @@ private:
 
 	CRect		m_rcDisp[TOTAL_DISP]; // 각 디스플레이용 Crect
 	HDC			m_hDC[TOTAL_DISP]; // 각 디스플레이용 핸들
-	Bitmap*		m_pBitmap; 
+	Bitmap*		m_pBitmap[TOTAL_DISP]; 
 	Graphics*	m_pGraphics[TOTAL_DISP]; 
 	// GDI+
 
-	HANDLE		m_hThread;
-	HANDLE		m_hTerminate;
-	
+	HANDLE		m_hThread[TOTAL_DISP];
+	HANDLE		m_hTerminate[TOTAL_DISP];
+	HANDLE		m_hGrabThread;
+	HANDLE		m_hGrabTerminate;
+
 public:
 	// Getting user input to find devcie wtih IP address
 	CIPAddressCtrl m_DeviceIPControl;

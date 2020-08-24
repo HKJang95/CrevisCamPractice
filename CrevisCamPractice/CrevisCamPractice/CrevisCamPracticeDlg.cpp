@@ -14,9 +14,21 @@
 
 // 응용 프로그램 정보에 사용되는 CAboutDlg 대화 상자입니다.
 
-void ThreadProc(CCrevisCamPracticeDlg* pPrivate)
+void ReceiveThreadProc(CCrevisCamPracticeDlg* pPrivate)
 {
 	pPrivate->ReceiveImage();
+}
+void NorThreadProc(CCrevisCamPracticeDlg* pPrivate)
+{
+	pPrivate->ProcessNormalImage();
+}
+void BinThreadProc(CCrevisCamPracticeDlg* pPrivate)
+{
+	pPrivate->ProcessBinImage();
+}
+void ROIThreadProc(CCrevisCamPracticeDlg* pPrivate)
+{
+	pPrivate->ProcessROIImage();
 }
 // ThreadProcesses : used for createthread
 
@@ -59,28 +71,32 @@ CCrevisCamPracticeDlg::CCrevisCamPracticeDlg(CWnd* pParent /*=NULL*/)
 	, m_Width(0)
 	, m_Height(0)
 	, m_BufferSize(0)
-	, m_pImage(NULL)
 	, m_IsOpened(FALSE)
-	, m_pBitmap(NULL)
 	, m_deviceEnum(DEVICE_CAMNUM_INIT)
 	, m_roiX(0)
 	, m_roiY(0)
 	, m_roiWidth(0)
 	, m_roiHeight(0)
-	, m_hThread(NULL)
-
+	, m_pOriImage(NULL)
+	, m_hGrabThread(NULL)
+	, m_pROIImage(NULL)
 {
+	m_hTerminate[NORMAL_VID] = CreateEvent(NULL, true, false, _T("NORMAL_TERMINATE"));
+	m_hTerminate[BINARY_VID] = CreateEvent(NULL, true, false, _T("BINARY_TERMINATE"));
+	m_hTerminate[ROI_VID] = CreateEvent(NULL, true, false, _T("ROI_TERMINATE"));
+	m_hGrabTerminate = CreateEvent(NULL, true, false, _T("GRAB_TERMINATE"));
+
 	for (int i = 0; i < TOTAL_DISP; i++)
 	{
 		m_pGraphics[i] = NULL;
 		m_hDC[i] = NULL;
 		m_rcDisp[i] = NULL;
 		m_IsPlay[i] = FALSE;
+		m_hThread[i] = NULL;
+		m_pBitmap[i] = NULL;
+		m_pImage[i] = NULL;
 	}
-
 	m_hIcon = AfxGetApp()->LoadIcon(IDR_MAINFRAME);
-
-	m_hTerminate = CreateEvent(NULL, true, false, NULL);
 }
 
 void CCrevisCamPracticeDlg::DoDataExchange(CDataExchange* pDX)
@@ -172,8 +188,8 @@ BOOL CCrevisCamPracticeDlg::OnInitDialog()
 	// rect info init
 
 	m_pGraphics[NORMAL_VID] = Graphics::FromHDC(m_hDC[NORMAL_VID]);
-	m_pGraphics[ROI_VID] = Graphics::FromHDC(m_hDC[ROI_VID]);
 	m_pGraphics[BINARY_VID] = Graphics::FromHDC(m_hDC[BINARY_VID]);
+	m_pGraphics[ROI_VID] = Graphics::FromHDC(m_hDC[ROI_VID]);
 	// get gdiplus handle
 
 	GetDlgItem(IDC_OPENBTN)->EnableWindow(TRUE);
@@ -232,7 +248,7 @@ void CCrevisCamPracticeDlg::OnPaint()
 	{
 		for (int i = 0; i < TOTAL_DISP; i++)
 		{
-			if (m_IsPlay[i] && m_pBitmap)
+			if (m_IsPlay[i] && m_pBitmap[i])
 			{
 				DrawImage(i);
 			}
@@ -370,16 +386,19 @@ void CCrevisCamPracticeDlg::OnBnClickedOpenbtn()
 	}
 
 	// Image Buffer Allocatation
-	m_pBitmap = new Bitmap(m_Width, m_Height, PixelFormat8bppIndexed);
-	
 	m_BufferSize = m_Width * m_Height;
-	m_pImage = malloc(m_BufferSize);
-	memset((void*)m_pImage, 0, m_BufferSize);
-	m_pGraphics[NORMAL_VID]->DrawImage(m_pBitmap, 0, 0, m_Width, m_Height);
-	m_pGraphics[BINARY_VID]->DrawImage(m_pBitmap, 0, 0, m_Width, m_Height);
-	m_pGraphics[ROI_VID]->DrawImage(m_pBitmap, 0, 0, m_Width, m_Height);
+	for (int i = 0; i < TOTAL_DISP; i++)
+	{
+		m_pBitmap[i] = new Bitmap(m_Width, m_Height, PixelFormat8bppIndexed);
+		m_pImage[i] = (char *)malloc(m_BufferSize);
+		m_pGraphics[i]->DrawImage(m_pBitmap[i], 0, 0, m_Width, m_Height);
+		memset((char *)m_pImage[i], 0, m_BufferSize);
+	}
 
+	m_pOriImage = (char *)malloc(m_BufferSize);
+	memset((char *)m_pOriImage, 0, m_BufferSize);
 	status = ST_AcqStart(m_hDevice);
+
 	if (status != MCAM_ERR_SUCCESS)
 	{
 		strErr.Format(_T("Acquisition start failed : %d"), status);
@@ -388,10 +407,9 @@ void CCrevisCamPracticeDlg::OnBnClickedOpenbtn()
 	}
 	// Camera acquitision starts when camera is been opened.
 
-
-	ResetEvent(m_hTerminate); // terminate thread for normal video streaming signal off
-	m_hThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)ThreadProc, this, 0, NULL);
-
+	ResetEvent(m_hGrabTerminate); // terminate thread for normal video streaming signal off
+	m_hGrabThread = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)ReceiveThreadProc, this, 0, NULL);
+	// Image Grab Starts here.
 	AfxMessageBox(_T("Camera open complete! Acquisition started."));
 
 	GetDlgItem(IDC_OPENBTN)->EnableWindow(FALSE);
@@ -413,19 +431,25 @@ void CCrevisCamPracticeDlg::OnBnClickedClosebtn()
 {
 	INT32 status = MCAM_ERR_SUCCESS;
 	CString strErr;
-
-	if (m_hThread != NULL)
-	{
-		SetEvent(m_hTerminate);
-		WaitForSingleObject(m_hThread, INFINITE);
-		CloseHandle(m_hThread);
-		m_hThread = NULL;
-	}// stops and frees threads.
-
 	for (int i = 0; i < TOTAL_DISP; i++)
 	{
+		if (m_hThread[i] != NULL)
+		{
+			SetEvent(m_hTerminate[i]);
+			WaitForSingleObject(m_hThread[i], INFINITE);
+			CloseHandle(m_hThread[i]);
+			m_hThread[i] = NULL;
+		}// stops and frees threads.
 		m_IsPlay[i] = FALSE;
-	} // turning off all displays
+	}
+
+	if (m_hGrabThread != NULL)
+	{
+		SetEvent(m_hGrabTerminate);
+		WaitForSingleObject(m_hGrabThread, INFINITE);
+		CloseHandle(m_hGrabThread);
+		m_hGrabThread = NULL;
+	}
 
 	status = ST_AcqStop(m_hDevice);
 	if (status != MCAM_ERR_SUCCESS)
@@ -435,12 +459,21 @@ void CCrevisCamPracticeDlg::OnBnClickedClosebtn()
 		return;
 	}
 	// Camera acquisition stops
-
-	if (m_pImage != NULL)
+	for (int i = 0; i < TOTAL_DISP; i++)
 	{
-		free(m_pImage);
-		m_pImage = NULL;
+		if (m_pImage[i] != NULL)
+		{
+			free(m_pImage[i]);
+			m_pImage[i] = NULL;
+		}
 	}
+
+	if (m_pOriImage != NULL)
+	{
+		free(m_pOriImage);
+		m_pOriImage = NULL;
+	}
+
 	// image buffer free and nullification
 	ST_CloseDevice(m_hDevice);
 
@@ -462,7 +495,12 @@ void CCrevisCamPracticeDlg::OnBnClickedClosebtn()
 
 void CCrevisCamPracticeDlg::OnBnClickedNorplaybtn()
 {
+	DWORD threadName = NORMAL_VID;
 	m_IsPlay[NORMAL_VID] = TRUE;
+
+	ResetEvent(m_hTerminate[NORMAL_VID]); // terminate thread for normal video streaming signal off
+	m_hThread[NORMAL_VID] = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)NorThreadProc, this, 0, &threadName);
+
 	GetDlgItem(IDC_NORPLAYBTN)->EnableWindow(FALSE);
 	GetDlgItem(IDC_NORSTOPBTN)->EnableWindow(TRUE);
 	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
@@ -472,6 +510,14 @@ void CCrevisCamPracticeDlg::OnBnClickedNorplaybtn()
 
 void CCrevisCamPracticeDlg::OnBnClickedNorstopbtn()
 {
+	if (m_hThread[NORMAL_VID] != NULL)
+	{
+		SetEvent(m_hTerminate[NORMAL_VID]);
+		WaitForSingleObject(m_hThread[NORMAL_VID], INFINITE);
+		CloseHandle(m_hThread[NORMAL_VID]);
+		m_hThread[NORMAL_VID] = NULL;
+	}
+
 	m_IsPlay[NORMAL_VID] = FALSE;
 	GetDlgItem(IDC_NORPLAYBTN)->EnableWindow(TRUE);
 	GetDlgItem(IDC_NORSTOPBTN)->EnableWindow(FALSE);
@@ -479,11 +525,11 @@ void CCrevisCamPracticeDlg::OnBnClickedNorstopbtn()
 	// TODO: 여기에 컨트롤 알림 처리기 코드를 추가합니다.
 } // when normal "stop" button click
 
-
 void CCrevisCamPracticeDlg::OnBnClickedRoiplaybtn()
 {
 	CString CroiX, CroiY, CroiHeight, CroiWidth;
 	CString strErr;
+	DWORD threadName = ROI_VID;
 	m_TBRoiX.GetWindowTextW(CroiX);
 	m_roiX = _ttoi(CroiX);
 	m_TBRoiY.GetWindowTextW(CroiY);
@@ -518,9 +564,10 @@ void CCrevisCamPracticeDlg::OnBnClickedRoiplaybtn()
 		return;
 	}
 
-
 	m_IsPlay[ROI_VID] = TRUE;
-
+	ResetEvent(m_hTerminate[ROI_VID]); // terminate thread for normal video streaming signal off
+	m_hThread[ROI_VID] = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)ROIThreadProc, this, 0, &threadName);
+	
 	GetDlgItem(IDC_ROIPLAYBTN)->EnableWindow(FALSE);
 	GetDlgItem(IDC_ROISTOPBTN)->EnableWindow(TRUE);
 	MemoryLeakCheck();
@@ -531,6 +578,13 @@ void CCrevisCamPracticeDlg::OnBnClickedRoiplaybtn()
 
 void CCrevisCamPracticeDlg::OnBnClickedRoistopbtn()
 {
+	if (m_hThread[ROI_VID] != NULL)
+	{
+		SetEvent(m_hTerminate[ROI_VID]);
+		WaitForSingleObject(m_hTerminate[ROI_VID], INFINITE);
+		CloseHandle(m_hThread[ROI_VID]);
+		m_hThread[ROI_VID] = NULL;
+	}
 	m_IsPlay[ROI_VID] = FALSE;
 	GetDlgItem(IDC_ROIPLAYBTN)->EnableWindow(TRUE);
 	GetDlgItem(IDC_ROISTOPBTN)->EnableWindow(FALSE);
@@ -542,6 +596,7 @@ void CCrevisCamPracticeDlg::OnBnClickedRoistopbtn()
 void CCrevisCamPracticeDlg::OnBnClickedBinplaybtn()
 {
 	CString CThreshold;
+	DWORD threadName = BINARY_VID;
 
 	m_TBThreshold.GetWindowTextW(CThreshold);
 	m_Threshold = _ttoi(CThreshold);
@@ -553,6 +608,8 @@ void CCrevisCamPracticeDlg::OnBnClickedBinplaybtn()
 	} // Threashold error value check
 
 	m_IsPlay[BINARY_VID] = TRUE;
+	ResetEvent(m_hTerminate[BINARY_VID]); // terminate thread for normal video streaming signal off
+	m_hThread[BINARY_VID] = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)BinThreadProc, this, 0, &threadName);
 
 	GetDlgItem(IDC_BINPLAYBTN)->EnableWindow(FALSE);
 	GetDlgItem(IDC_BINSTOPBTN)->EnableWindow(TRUE);
@@ -563,7 +620,16 @@ void CCrevisCamPracticeDlg::OnBnClickedBinplaybtn()
 
 void CCrevisCamPracticeDlg::OnBnClickedBinstopbtn()
 {
+
+	if (m_hThread[BINARY_VID] != NULL)
+	{
+		SetEvent(m_hTerminate[BINARY_VID]);
+		WaitForSingleObject(m_hThread[BINARY_VID], INFINITE);
+		CloseHandle(m_hThread[BINARY_VID]);
+		m_hThread[BINARY_VID] = NULL;
+	}
 	m_IsPlay[BINARY_VID] = FALSE;
+
 	GetDlgItem(IDC_BINPLAYBTN)->EnableWindow(TRUE);
 	GetDlgItem(IDC_BINSTOPBTN)->EnableWindow(FALSE);
 	MemoryLeakCheck();
@@ -578,18 +644,27 @@ void CCrevisCamPracticeDlg::OnDestroy()
 	INT32 status = MCAM_ERR_SUCCESS;
 	CString strErr;
 	
-	if (m_hThread != NULL)
-	{
-		SetEvent(m_hTerminate);
-		WaitForSingleObject(m_hTerminate, INFINITE);
-		CloseHandle(m_hThread);
-		m_hThread = NULL;
-	}
-	
 	// cycles on m_hThreadArr and checks if any thread is being used, and terminates
 	// sets interrupt, wait for thread to be halted then close handle & frees pointer.
 	if (m_IsOpened == TRUE)
 	{
+		for (int i = 0; i < TOTAL_DISP; i++){
+			if (m_hThread[i] != NULL)
+			{
+				SetEvent(m_hTerminate[i]);
+				WaitForSingleObject(m_hThread[i], INFINITE);
+				CloseHandle(m_hThread[i]);
+				m_hThread[i] = NULL;
+			}
+		}
+		if (m_hGrabThread != NULL)
+		{
+			SetEvent(m_hGrabTerminate);
+			WaitForSingleObject(m_hGrabThread, INFINITE);
+			CloseHandle(m_hGrabThread);
+			m_hGrabThread = NULL;
+		}
+		
 		status = ST_AcqStop(m_hDevice);
 		if (status != MCAM_ERR_SUCCESS)
 		{
@@ -598,11 +673,20 @@ void CCrevisCamPracticeDlg::OnDestroy()
 			return;
 		}
 
-		if (m_pImage != NULL)
-		{
-			free(m_pImage);
-			m_pImage = NULL;
+		for (int i = 0; i < TOTAL_DISP; i++){
+			if (m_pImage[i] != NULL)
+			{
+				free(m_pImage[i]);
+				m_pImage[i] = NULL;
+			}
 		}
+
+		if (m_pOriImage != NULL)
+		{
+			free(m_pOriImage);
+			m_pOriImage = NULL;
+		}
+		
 		// image grab buffer free & nullification
 		ST_CloseDevice(m_hDevice);
 	}
@@ -633,55 +717,138 @@ void CCrevisCamPracticeDlg::SetFeature()
 void CCrevisCamPracticeDlg::ReceiveImage()
 {
 	INT32 status = MCAM_ERR_SUCCESS;
-	
-	while (WaitForSingleObject(m_hTerminate, 0) != WAIT_OBJECT_0)
+
+	while (WaitForSingleObject(m_hGrabTerminate, 0) != WAIT_OBJECT_0)
 	{
-		status = ST_GrabImage(m_hDevice, m_pImage, m_BufferSize);
-		// grabbing image from camera
-		if (status == MCAM_ERR_SUCCESS)
-		{
-			for (int i = 0; i < TOTAL_DISP; i++)
+		status = ST_GrabImage(m_hDevice, m_pOriImage, m_BufferSize);
+			if (status == MCAM_ERR_SUCCESS)
 			{
-				if (m_IsPlay[i]){
-					InvalidateRect(m_rcDisp[i], FALSE);
+				for (int i = 0; i < 3; i++)
+				{
+					memcpy(m_pImage[i], m_pOriImage, m_BufferSize);
+					// if each display is on play, copies original image to buffers
+					for (int i = 0; i < m_BufferSize; i++)
+					{
+						if (m_pImage[BINARY_VID][i] >= m_Threshold)
+						{
+							m_pImage[BINARY_VID][i] = 255;
+						}
+						else
+						{
+							m_pImage[BINARY_VID][i] = 0;
+						}
+					}
 				}
+				
 			}
+			else
+			{
+				AfxMessageBox(_T("Image receiving fail!"));
+				for (int i = 0; i < TOTAL_DISP; i++)
+				{
+					m_IsPlay[i] = FALSE;
+					CloseHandle(m_hThread[i]);
+					m_hThread[i] = NULL;
+					if (m_pImage[i] != NULL)
+						{
+							free(m_pImage[i]);
+							m_pImage[i] = NULL;
+							// image buffer free and nullification
+						}
+				} // turning off all displays
+				if (m_pOriImage != NULL)
+				{
+					free(m_pOriImage);
+					m_pOriImage = NULL;
+				}
+
+				GetDlgItem(IDC_OPENBTN)->EnableWindow(TRUE);
+				GetDlgItem(IDC_NORPLAYBTN)->EnableWindow(FALSE);
+				GetDlgItem(IDC_ROIPLAYBTN)->EnableWindow(FALSE);
+				GetDlgItem(IDC_BINPLAYBTN)->EnableWindow(FALSE);
+				GetDlgItem(IDC_NORSTOPBTN)->EnableWindow(FALSE);
+				GetDlgItem(IDC_ROISTOPBTN)->EnableWindow(FALSE);
+				GetDlgItem(IDC_BINSTOPBTN)->EnableWindow(FALSE);
+				GetDlgItem(IDC_CLOSEBTN)->EnableWindow(FALSE);
+				m_IsOpened = FALSE;
+				m_deviceEnum = DEVICE_DISCONNECTED;
+
+				SetThreadExecutionState(ES_CONTINUOUS);
+				return;
 		}
-		else
+	}
+} // Grab once, copies into other buffers. and calls image processing functions here.
+
+void CCrevisCamPracticeDlg::ProcessNormalImage()
+{
+	if (!m_IsOpened)
+	{
+		return;
+	}
+	while (WaitForSingleObject(m_hTerminate[NORMAL_VID], 0) != WAIT_OBJECT_0)
+	{
+		Sleep(10);
+		// access to the memory which contains image from device
+		// and changes it to 0 or 255 on m_Threshold
+		InvalidateRect(m_rcDisp[NORMAL_VID], NULL);
+	}
+}
+
+
+void CCrevisCamPracticeDlg::ProcessROIImage()
+{
+	if (!m_IsOpened)
+	{
+		return;
+	}
+	while (WaitForSingleObject(m_hTerminate[ROI_VID], 0) != WAIT_OBJECT_0)
+	{
+		int OriIndex = 0;
+		int CpyIndex = 0;
+
+		delete[] m_pBitmap[ROI_VID];
+		// to assign ROI image size bitmap buffer
+		m_pROIImage = (char *)malloc(m_roiWidth * m_roiHeight);
+		m_pBitmap[ROI_VID] = new Bitmap(m_roiWidth, m_roiHeight, PixelFormat8bppIndexed);
+
+		for (int i = m_roiY; i < m_roiHeight; i++)
 		{
-			AfxMessageBox(_T("Camera is disconnected!"));
-			for (int i = 0; i < TOTAL_DISP; i++)
+			for (int j = m_roiX; j < m_roiWidth; j++)
 			{
-				m_IsPlay[i] = FALSE;
-			} // turning off all displays
-			
-			// Camera acquisition stops
-
-			if (m_pImage != NULL)
-			{
-				free(m_pImage);
-				m_pImage = NULL;
+				OriIndex = (i * m_roiHeight) + j;
+				m_pROIImage[CpyIndex] = m_pImage[ROI_VID][OriIndex];
+				CpyIndex++;
 			}
-			// image buffer free and nullification
-
-			GetDlgItem(IDC_OPENBTN)->EnableWindow(TRUE);
-			GetDlgItem(IDC_NORPLAYBTN)->EnableWindow(FALSE);
-			GetDlgItem(IDC_ROIPLAYBTN)->EnableWindow(FALSE);
-			GetDlgItem(IDC_BINPLAYBTN)->EnableWindow(FALSE);
-			GetDlgItem(IDC_NORSTOPBTN)->EnableWindow(FALSE);
-			GetDlgItem(IDC_ROISTOPBTN)->EnableWindow(FALSE);
-			GetDlgItem(IDC_BINSTOPBTN)->EnableWindow(FALSE);
-			GetDlgItem(IDC_CLOSEBTN)->EnableWindow(FALSE);
-			m_IsOpened = FALSE;
-			m_deviceEnum = DEVICE_DISCONNECTED;
-			SetThreadExecutionState(ES_CONTINUOUS);
-			return;
 		}
-		MemoryLeakCheck();
+		InvalidateRect(m_rcDisp[ROI_VID], NULL);
 	}
 	// grab image by and sends to display which has vidType id.
+}
 
-	
+
+void CCrevisCamPracticeDlg::ProcessBinImage()
+{
+	if (!m_IsOpened)
+	{
+		return;
+	}
+	while (WaitForSingleObject(m_hTerminate[BINARY_VID], 0) != WAIT_OBJECT_0)
+	{
+		for (int i = 0; i < m_BufferSize; i++)
+		{
+			if (m_pImage[BINARY_VID][i] >= m_Threshold)
+			{
+				m_pImage[BINARY_VID][i] = 255;
+			}
+			else
+			{
+				m_pImage[BINARY_VID][i] = 0;
+			}
+		}
+		InvalidateRect(m_rcDisp[BINARY_VID], NULL);
+	}
+	// grab image by and sends to display which has vidType id.
+	MemoryLeakCheck();
 }
 void CCrevisCamPracticeDlg::DrawImage(int vidType)
 {
@@ -689,18 +856,30 @@ void CCrevisCamPracticeDlg::DrawImage(int vidType)
 	{
 		return;
 	}
-
 	BitmapData bitmapdata;
 	Rect rc(0, 0, m_Width, m_Height);
-	Rect roirc(m_roiX, m_roiY, m_roiWidth, m_roiHeight); // rectangular for ROI section square on normal video
-	Rect dispRc(0, 0, m_rcDisp[vidType].Width(), m_rcDisp[vidType].Height()); // 
-	Pen pen(Color(255, 0, 255), 5);
-	Graphics mDC(m_pBitmap);
-	// if video is not ROI just change color of the video and streams
 
-	m_pBitmap->LockBits(&rc, 0, PixelFormat8bppIndexed, &bitmapdata);
-	memcpy(bitmapdata.Scan0, m_pImage, m_BufferSize);
-	m_pBitmap->UnlockBits(&bitmapdata);
+	Rect roirc(m_roiX, m_roiY, m_roiWidth, m_roiHeight); // rectangular for ROI section square on normal video
+	Rect dispRc(0, 0, m_rcDisp[vidType].Width(), m_rcDisp[vidType].Height());
+	Pen pen(Color(255, 0, 255), 5);
+	Graphics mDC(m_pBitmap[NORMAL_VID]);
+	
+	// if video is not ROI just change color of the video and streams
+	if (vidType != ROI_VID)
+	{
+		m_pBitmap[vidType]->LockBits(&rc, 0, PixelFormat8bppIndexed, &bitmapdata);
+		memcpy(bitmapdata.Scan0, m_pImage[vidType], m_BufferSize);
+		m_pBitmap[vidType]->UnlockBits(&bitmapdata);
+	}
+	else
+	{
+		rc = Rect(0, 0, m_roiWidth, m_roiHeight);
+		m_pBitmap[ROI_VID]->LockBits(&rc, 0, PixelFormat8bppIndexed, &bitmapdata);
+		memcpy(bitmapdata.Scan0, m_pROIImage, m_roiWidth * m_roiHeight);
+		m_pBitmap[ROI_VID]->UnlockBits(&bitmapdata);
+	}
+	char debug = 0;
+	CString str;
 	ConvertPalette(vidType);
 	switch (vidType)
 	{
@@ -711,15 +890,18 @@ void CCrevisCamPracticeDlg::DrawImage(int vidType)
 			// to prevent double buffering issue
 			// draws on the bitmap that has video
 		}
-		m_pGraphics[vidType]->DrawImage(m_pBitmap, dispRc, 0, 0, dispRc.Width, dispRc.Height, UnitPixel);
-		break;
-
-	case ROI_VID:
-		m_pGraphics[vidType]->DrawImage(m_pBitmap, dispRc, m_roiX, m_roiY, m_roiWidth, m_roiHeight, UnitPixel);
+		m_pGraphics[NORMAL_VID]->DrawImage(m_pBitmap[NORMAL_VID], dispRc, 0, 0, dispRc.Width, dispRc.Height, UnitPixel);
 		break;
 
 	case BINARY_VID:
-		m_pGraphics[vidType]->DrawImage(m_pBitmap, dispRc, 0, 0, dispRc.Width, dispRc.Height, UnitPixel);
+		debug = m_pImage[BINARY_VID][15000];
+		str.Format(_T("%d\n"), debug);
+		OutputDebugStringW(str);
+		m_pGraphics[BINARY_VID]->DrawImage(m_pBitmap[BINARY_VID], dispRc, 0, 0, dispRc.Width, dispRc.Height, UnitPixel);
+		break;
+
+	case ROI_VID:
+		m_pGraphics[ROI_VID]->DrawImage(m_pBitmap[ROI_VID], dispRc, 0, 0, m_roiWidth, m_roiHeight, UnitPixel);
 		break;
 	}
 	MemoryLeakCheck();
@@ -727,9 +909,9 @@ void CCrevisCamPracticeDlg::DrawImage(int vidType)
 
 void CCrevisCamPracticeDlg::ConvertPalette(int vidType)
 {
-	int paletteSize = m_pBitmap->GetPaletteSize();
+	int paletteSize = m_pBitmap[vidType]->GetPaletteSize();
 	ColorPalette* pPalette = new ColorPalette[paletteSize];
-	m_pBitmap->GetPalette(pPalette, paletteSize);
+	m_pBitmap[vidType]->GetPalette(pPalette, paletteSize);
 	// gets palette info of bitmap image to set color info of the bitmap
 	switch (vidType)
 	{
@@ -739,26 +921,12 @@ void CCrevisCamPracticeDlg::ConvertPalette(int vidType)
 		{
 			pPalette->Entries[i] = Color::MakeARGB(255, i, i, i);
 		}
-		m_pBitmap->SetPalette(pPalette);
+		m_pBitmap[vidType]->SetPalette(pPalette);
 		break;
-	// Normal video || ROI video color set
+		// Normal video || ROI video color set
 	case BINARY_VID:
-		for (unsigned int i = 0; i < pPalette->Count; i++)
-		{
-			if (i <= m_Threshold)
-			{
-				pPalette->Entries[i] = Color::MakeARGB(255, 0, 0, 0);
-			}
-			else
-			{
-				pPalette->Entries[i] = Color::MakeARGB(255, 255, 255, 255);
-			}
-		}
-		m_pBitmap->SetPalette(pPalette);
 		break;
-		// Binary video color set
-		// if color value is lower than threshold -> 0
-		// if higher -> 255
+
 	default:
 		AfxMessageBox(TEXT("vidtype error : on converting palette!"));
 		delete[] pPalette;
@@ -768,3 +936,4 @@ void CCrevisCamPracticeDlg::ConvertPalette(int vidType)
 	delete[] pPalette;
 	MemoryLeakCheck();
 }
+
