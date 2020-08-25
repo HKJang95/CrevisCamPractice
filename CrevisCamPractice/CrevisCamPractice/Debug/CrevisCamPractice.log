@@ -1,6 +1,4 @@
 ﻿  CrevisCamPracticeDlg.cpp
-e:\필요문서\과제\crevis sdk 활용 실습\creviscampractice\creviscampractice\creviscampracticedlg.cpp(732): warning C4018: '>=' : signed 또는 unsigned가 일치하지 않습니다.
-e:\필요문서\과제\crevis sdk 활용 실습\creviscampractice\creviscampractice\creviscampracticedlg.cpp(734): warning C4309: '=' : 상수 값이 잘립니다.
-e:\필요문서\과제\crevis sdk 활용 실습\creviscampractice\creviscampractice\creviscampracticedlg.cpp(839): warning C4018: '>=' : signed 또는 unsigned가 일치하지 않습니다.
-e:\필요문서\과제\crevis sdk 활용 실습\creviscampractice\creviscampractice\creviscampracticedlg.cpp(841): warning C4309: '=' : 상수 값이 잘립니다.
+e:\필요문서\과제\crevis sdk 활용 실습\creviscampractice\creviscampractice\creviscampracticedlg.cpp(769): warning C4018: '>=' : signed 또는 unsigned가 일치하지 않습니다.
+e:\필요문서\과제\crevis sdk 활용 실습\creviscampractice\creviscampractice\creviscampracticedlg.cpp(771): warning C4309: '=' : 상수 값이 잘립니다.
   CrevisCamPractice.vcxproj -> E:\필요문서\과제\Crevis SDk 활용 실습\CrevisCamPractice\Debug\CrevisCamPractice.exe

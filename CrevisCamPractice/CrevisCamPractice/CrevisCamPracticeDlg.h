@@ -80,6 +80,8 @@ private:
 	INT32		m_roiHeight;
 	// for videos
 
+	CRITICAL_SECTION mSc;
+
 	CRect		m_rcDisp[TOTAL_DISP]; // 각 디스플레이용 Crect
 	HDC			m_hDC[TOTAL_DISP]; // 각 디스플레이용 핸들
 	Bitmap*		m_pBitmap[TOTAL_DISP]; 
